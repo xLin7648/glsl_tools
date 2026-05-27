@@ -1,0 +1,3 @@
+[env]
+# 禁止 cc crate 自动链接 C++ 标准库，由我们自己的 build.rs 处理
+CXXSTDLIB_aarch64_linux_android = ""
