@@ -1,0 +1,12 @@
+[package]
+name = "glsl_tools"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "glsl_tools"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+glslang = "0.8.1"
+bytemuck = "1.25.0"
