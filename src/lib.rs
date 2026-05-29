@@ -2,8 +2,8 @@ use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
 use glslang::{
-    Compiler, CompilerOptions, OpenGlVersion, Shader, ShaderInput, ShaderMessage, ShaderOptions,
-    ShaderSource, SourceLanguage, SpirvVersion, Target, VulkanVersion,
+    Compiler, CompilerOptions, GlslProfile, Shader, ShaderInput, ShaderMessage,
+    ShaderOptions, ShaderSource, SourceLanguage, SpirvVersion, Target, VulkanVersion,
 };
 
 // ============================================================
@@ -176,6 +176,31 @@ pub extern "C" fn free_spv(spv_data: *mut u8, spv_len: i32) {
     }
 }
 
+/// 检测 GLSL 源码是否使用 ES 版本指令（如 `#version 320 es`）
+fn source_is_es(source: &str) -> bool {
+    source.lines().any(|line| {
+        let t = line.trim();
+        // 匹配 "#version XXX es" 模式
+        if let Some(rest) = t.strip_prefix("#version") {
+            rest.trim_end().ends_with("es")
+        } else {
+            false
+        }
+    })
+}
+
+/// 从 GLSL 源码解析 `#version` 指令中的版本号
+fn parse_glsl_version(source: &str) -> Option<i32> {
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("#version") {
+            let num_str = rest.split_whitespace().next()?;
+            return num_str.parse::<i32>().ok();
+        }
+    }
+    None
+}
+
 // ============================================================
 //  FFI — verify (验证 GLSL 语法)
 // ============================================================
@@ -212,16 +237,28 @@ pub unsafe extern "C" fn verify(
         }
     };
 
-    let target = if is_vulkan {
-        make_vulkan_target()
+    let (target, version_profile) = if is_vulkan {
+        (make_vulkan_target(), None)
     } else {
-        Target::OpenGL {
-            version: OpenGlVersion::OpenGL4_5,
-            spirv_version: Some(SPIRV_VERSION),
-        }
+        // 非 Vulkan 着色器（ES 或 Core）：只做 parse 语法检查，不进入
+        // compile()。该 crate 的 program.compile() 始终施加 SPIR-V 规则
+        // （强制 location、non-opaque uniform 必须入 block / 带 location），
+        // 这些规则对桌面 OpenGL 和 GLES 的常规验证不适用。
+        let version_profile = if source_is_es(source_str) {
+            let version = parse_glsl_version(source_str).unwrap_or(300);
+            Some((version, GlslProfile::ES))
+        } else {
+            None // 桌面 GLSL 由 glslang 从 #version 450 自动检测
+        };
+        (Target::None(None), version_profile)
     };
 
-    let options = make_options(target);
+    let options = CompilerOptions {
+        source_language: SourceLanguage::GLSL,
+        target,
+        version_profile,
+        messages: ShaderMessage::DEFAULT,
+    };
     let glsl_source = ShaderSource::from(source_str);
 
     let input = match make_shader_input(&glsl_source, &options) {
@@ -239,6 +276,11 @@ pub unsafe extern "C" fn verify(
             return -1;
         }
     };
+
+    if !is_vulkan {
+        // Shader::new() parse 成功 = 语法有效
+        return 0;
+    }
 
     shader.options(ShaderOptions::AUTO_MAP_LOCATIONS);
 
